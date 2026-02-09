@@ -2,12 +2,12 @@
   "name": "skir-language",
   "displayName": "Skir - Language Support",
   "description": "Language support for Skir - a language for representing data types, constants and RPC interfaces",
-  "version": "0.2.4",
+  "version": "0.2.6",
   "publisher": "TylerFibonacci",
   "engines": {
     "vscode": "^1.60.0"
   },
-  "icon": "resources/skir-icon.png",
+  "icon": "resources/iceberg-icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/gepheum/skir"
@@ -27,6 +27,13 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "iconThemes": [
+      {
+        "id": "skir-icon-theme",
+        "label": "Skir File Icons",
+        "path": "./resources/icon-theme.json"
+      }
+    ],
     "languages": [
       {
         "id": "skir",

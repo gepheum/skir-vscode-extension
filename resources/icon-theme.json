@@ -1,0 +1,10 @@
+{
+  "iconDefinitions": {
+    "skir": {
+      "iconPath": "./iceberg-icon.png"
+    }
+  },
+  "fileExtensions": {
+    "skir": "skir"
+  }
+}
