@@ -1,6 +1,8 @@
 # Skir Language Support for Visual Studio Code
 
-This extension provides language support for the Skir language - a language for representing data types, constants and RPC interfaces (similar to Protocol Buffer).
+This extension provides language support for the Skir language - a declarative language for representing data types, constants and APIs (similar to Protocol Buffer).
+
+**Website:** https://skir.build
 
 ## Features
 
@@ -13,7 +15,7 @@ This extension provides language support for the Skir language - a language for 
 
 ## Skir Language
 
-Skir is a language for representing data types, constants and RPC interfaces. It is designed for systems where different services are written in different languages but need to exchange structured data.
+Skir is a language for representing data types, constants and APIs. It is designed for systems where different services are written in different languages but need to exchange structured data.
 
 Example:
 
@@ -67,11 +69,3 @@ Initial release of Skir Language Support:
 - Hover information for symbols
 - Bracket matching and auto-closing pairs
 - Comment toggling (line and block comments)
-
----
-
-## About Skir
-
-Skir is designed with backward and forward compatibility in mind. You can evolve your data schemas by adding new fields or renaming fields. You will still be able to deserialize old values, and you won't break existing applications that use older versions of the schema.
-
-For more information about Skir, visit the [official documentation](https://github.com/gepheum/skir).
