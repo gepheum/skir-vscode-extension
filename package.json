@@ -8,7 +8,7 @@
     "vscode": "^1.60.0"
   },
   "icon": "resources/iceberg-icon.png",
-  "homepage": "https://skir.sh",
+  "homepage": "https://skir.sh/",
   "repository": {
     "type": "git",
     "url": "https://github.com/gepheum/skir"
