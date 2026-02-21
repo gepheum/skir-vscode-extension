@@ -138,11 +138,6 @@ export class SkirLanguageExtension {
         }
         if (content) {
           // Find the workspace for this snapshot
-          const workspaceUri = uri.replace(
-            /\/skir-snapshot\.json$/,
-            "/skir.yml",
-          );
-          const workspace = this.workspaces.get(workspaceUri);
           if (workspace) {
             const moduleSetOrError = snapshotFileContentToModuleSet(
               content.content,
@@ -427,9 +422,16 @@ export class SkirLanguageExtension {
 
   /** Removes all the files which seem to no longer exist on the filesystem. */
   async runGarbageCollection(): Promise<void> {
-    const uris = Array.from(this.moduleBundles.keys()).concat(
-      Array.from(this.workspaces.keys()),
-    );
+    const uris = Array.from(this.moduleBundles.keys());
+    for (const workspace of this.workspaces.values()) {
+      uris.push(workspace.skirYmlUri);
+      if (workspace.lastSnapshot) {
+        uris.push(workspace.rootUri + "skir-snapshot.json");
+      }
+      if (workspace.dependencies) {
+        uris.push(workspace.rootUri + "skir-external/dependencies.json");
+      }
+    }
     for (const uri of uris) {
       let isFile = false;
       try {
@@ -441,6 +443,7 @@ export class SkirLanguageExtension {
         // Do nothing, the file does not exist.
       }
       if (!isFile) {
+        console.log(`File no longer exists, removing: ${uri}`);
         this.setFileContent(uri, undefined);
       }
     }
@@ -516,7 +519,7 @@ class Workspace implements ModuleParser {
 
   readonly srcUri = this.rootUri + "skir-src/";
   readonly externalUri = this.rootUri + "skir-external/";
-  readonly skirYmlUrl = this.rootUri + "skir.yml";
+  readonly skirYmlUri = this.rootUri + "skir.yml";
   // key: module path; does not include dependency modules
   private readonly modules = new Map<string, ModuleBundle>();
   private scheduledResolution?: Readonly<{
@@ -627,7 +630,7 @@ class Workspace implements ModuleParser {
       dependenciesInSync = true;
     }
     this.diagnosticCollection.set(
-      vscode.Uri.parse(this.skirYmlUrl),
+      vscode.Uri.parse(this.skirYmlUri),
       dependenciesInSync
         ? []
         : [

@@ -2,7 +2,7 @@
   "name": "skir-language",
   "displayName": "Skir - Language Support",
   "description": "Language support for Skir - a language for representing data types, constants and RPC interfaces",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "publisher": "TylerFibonacci",
   "engines": {
     "vscode": "^1.60.0"
@@ -71,21 +71,25 @@
     "skir-internal": "0.1.0"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.2",
-    "@types/mocha": "^10.0.1",
+    "@eslint/js": "^10.0.1",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^20.6.0",
     "@types/vscode": "^1.60.0",
-    "@typescript-eslint/eslint-plugin": "^8.50.1",
-    "@typescript-eslint/parser": "^8.50.1",
-    "@vscode/vsce": "^2.15.0",
+    "@typescript-eslint/eslint-plugin": "^8.56.0",
+    "@typescript-eslint/parser": "^8.56.0",
+    "@vscode/vsce": "^3.7.1",
     "buckwheat": "^1.1.2",
-    "eslint": "^9.39.2",
-    "mocha": "^11.3.0",
+    "eslint": "^10.0.1",
+    "mocha": "^11.7.5",
     "prettier": "^3.2.4",
     "prettier-plugin-organize-imports": "^4.2.0",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
     "typescript": "^5.2.2",
-    "typescript-eslint": "^8.14.0"
+    "typescript-eslint": "^8.56.0"
+  },
+  "overrides": {
+    "diff": "^8.0.3",
+    "minimatch": "^10.2.2"
   }
 }
