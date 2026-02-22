@@ -6,12 +6,15 @@ This extension provides language support for the Skir language - a declarative l
 
 ## Features
 
-- Syntax highlighting for Skir files (`.skir` extension)
-- Format on save
-- Go to definition for symbols and imports
-- Hover information for symbols
-- Comment toggling (line and block comments)
-- Bracket matching and auto-closing pairs
+- **Syntax highlighting** for `.skir` files
+- **Diagnostics** — lexical, parse, type and breaking-change errors shown inline
+- **Go to definition** — navigate to any symbol or imported module
+- **Hover documentation** — shows the doc comment of a record, field, method or constant
+- **Find all references** — lists every usage of a symbol across the workspace
+- **Rename symbol** — renames a symbol and all its references in one step (local symbols only)
+- **Format on save** and on-demand formatting
+- **Comment toggling** — line (`//`) and block (`/* */`) comments
+- **Bracket matching and auto-closing pairs**
 
 ## Skir Language
 
@@ -46,26 +49,36 @@ method IsConvex(Shape): bool = 12345;
 
 ## Go to Definition
 
-This extension supports navigating to the definition of symbols within your Skir codebase:
+Navigate to the definition of any symbol or import path:
 
-- Click on any symbol to navigate to its definition
-- Click on import paths to navigate to the imported file
+- Place the cursor on a symbol name or an import path and press **F12** (or right-click → *Go to Definition*).
+- Works across files within the same Skir workspace.
+
+## Hover Documentation
+
+Hovering over a record, field, method or constant shows the doc comment attached to that declaration.
+
+## Find All References
+
+Place the cursor on any symbol and press **Shift+F12** (or right-click → *Find All References*) to see every location in the workspace that references it.
+
+## Rename Symbol
+
+Place the cursor on a symbol name and press **F2** (or right-click → *Rename Symbol*) to rename it and all its references atomically. Renaming is only supported for symbols defined in the current workspace; symbols from external dependencies cannot be renamed.
+
+## Diagnostics
+
+The extension continuously validates your files and reports errors in the Problems panel:
+
+- **Lexical and parse errors** — syntax mistakes in `.skir` files.
+- **Type errors** — unknown types, missing fields, etc.
+- **Breaking changes** — when a `skir-snapshot.json` is present, any change that would break existing consumers (e.g. removed fields, changed types) is highlighted as a warning.
+- **Dependencies out of sync** — a warning on `skir.yml` when the installed packages do not match the declared versions; run `npx skir gen` to fix.
+
+## Formatting
+
+Documents are formatted automatically on save. You can also trigger formatting manually with **Shift+Alt+F** (or right-click → *Format Document*).
 
 ## Requirements
 
 No special requirements for this extension.
-
-## Release Notes
-
-### 0.1.1
-
-- Format on save
-
-### 0.1.0
-
-Initial release of Skir Language Support:
-- Syntax highlighting
-- Go to definition for symbols and import paths
-- Hover information for symbols
-- Bracket matching and auto-closing pairs
-- Comment toggling (line and block comments)
