@@ -11,7 +11,7 @@ import {
 } from "skir/dist/compatibility_checker.js";
 import { SkirConfig } from "skir/dist/config";
 import { parseSkirConfig, SkirConfigError } from "skir/dist/config_parser.js";
-import { findDefinition } from "skir/dist/definition_finder.js";
+import { findDefinition, findReferences } from "skir/dist/definition_finder.js";
 import { getShortMessageForBreakingChange } from "skir/dist/error_renderer.js";
 import { formatModule } from "skir/dist/formatter.js";
 import { ModuleParser, ModuleSet } from "skir/dist/module_set.js";
@@ -449,6 +449,179 @@ export class SkirLanguageExtension {
     }
   }
 
+  /** Returns hover documentation for the symbol at the given offset, if any. */
+  getHoverInfo(uri: string, offset: number): vscode.Hover | null {
+    const moduleBundle = this.moduleBundles.get(uri);
+    if (!moduleBundle) return null;
+    const module = moduleBundle.astTree.result;
+    if (!module) return null;
+
+    const definitionMatch = findDefinition(module, offset);
+    if (!definitionMatch) return null;
+    const { declaration } = definitionMatch;
+    if (!declaration) return null;
+    // Only record, method, constant and field declarations carry documentation
+    if (
+      declaration.kind !== "record" &&
+      declaration.kind !== "method" &&
+      declaration.kind !== "constant" &&
+      declaration.kind !== "field"
+    ) {
+      return null;
+    }
+    const docText = declaration.doc.text.trim();
+    if (!docText) return null;
+    const md = new vscode.MarkdownString();
+    md.appendText(docText);
+    return new vscode.Hover(md);
+  }
+
+  /** Returns all locations that reference the symbol at the given offset. */
+  findAllReferences(uri: string, offset: number): vscode.Location[] {
+    const result = this.getDefinitionToken(uri, offset);
+    if (!result) return [];
+    const { definitionToken, workspace } = result;
+    workspace.revolveNow();
+    const resolvedModules = workspace.getResolvedModules();
+    const referenceTokens = findReferences(definitionToken, resolvedModules);
+    return referenceTokens
+      .map((token) => this.tokenToLocation(token, workspace))
+      .filter((loc): loc is vscode.Location => loc !== null);
+  }
+
+  /**
+   * Validates that a rename is allowed and returns the word range + placeholder.
+   * Throws if rename is not permitted (e.g., external symbol).
+   */
+  prepareRenameAt(
+    uri: string,
+    offset: number,
+    document: vscode.TextDocument,
+    position: vscode.Position,
+  ): { range: vscode.Range; placeholder: string } {
+    const moduleBundle = this.moduleBundles.get(uri);
+    if (!moduleBundle) throw new Error("Cannot rename: module not found");
+    const module = moduleBundle.astTree.result;
+    if (!module) throw new Error("Cannot rename: module has errors");
+
+    // If the cursor is on a reference to an external symbol, reject rename
+    const definitionMatch = findDefinition(module, offset);
+    if (definitionMatch !== null) {
+      // declaration === undefined means the cursor is on a module path in an
+      // import statement, which is not a renameable symbol.
+      if (definitionMatch.declaration === undefined) {
+        throw new Error("Cannot rename: no renameable symbol at cursor");
+      }
+      if (definitionMatch.modulePath.startsWith("@")) {
+        throw new Error(
+          "Cannot rename: symbol is defined in an external dependency",
+        );
+      }
+    }
+
+    const wordRange = document.getWordRangeAtPosition(
+      position,
+      /[a-zA-Z_][a-zA-Z0-9_]*/,
+    );
+    if (!wordRange) throw new Error("Cannot rename: no symbol at cursor");
+    return { range: wordRange, placeholder: document.getText(wordRange) };
+  }
+
+  /**
+   * Builds a WorkspaceEdit that renames every occurrence of the symbol at
+   * the given offset to `newName`.
+   */
+  provideRenameEditsAt(
+    uri: string,
+    offset: number,
+    newName: string,
+  ): vscode.WorkspaceEdit | null {
+    const result = this.getDefinitionToken(uri, offset);
+    if (!result) return null;
+    const { definitionToken, workspace } = result;
+
+    // Reject renaming of external symbols
+    if (definitionToken.line.modulePath.startsWith("@")) return null;
+
+    workspace.revolveNow();
+    const resolvedModules = workspace.getResolvedModules();
+    const referenceTokens = findReferences(definitionToken, resolvedModules);
+
+    // Rename the definition itself plus every reference
+    const allTokens = [definitionToken, ...referenceTokens];
+    const workspaceEdit = new vscode.WorkspaceEdit();
+    for (const token of allTokens) {
+      const location = this.tokenToLocation(token, workspace);
+      if (!location) continue;
+      workspaceEdit.replace(
+        location.uri,
+        location.range,
+        getTokenReplacement(token, newName),
+      );
+    }
+    return workspaceEdit;
+  }
+
+  /**
+   * Resolves the name token of the declaration that the cursor is pointing at.
+   * If the cursor is on a reference, the definition's name token is returned.
+   * If the cursor is on the declaration name itself, that token is returned.
+   */
+  private getDefinitionToken(
+    uri: string,
+    offset: number,
+  ): { definitionToken: Token; workspace: Workspace } | null {
+    const moduleBundle = this.moduleBundles.get(uri);
+    if (!moduleBundle) return null;
+    const module = moduleBundle.astTree.result;
+    if (!module) return null;
+    const { moduleWorkspace } = moduleBundle;
+    if (!moduleWorkspace) return null;
+    const { workspace } = moduleWorkspace;
+
+    const definitionMatch = findDefinition(module, offset);
+    if (definitionMatch) {
+      const { declaration } = definitionMatch;
+      if (!declaration) return null; // module-path match, no name token
+      return { definitionToken: declaration.name, workspace };
+    } else {
+      // Cursor is on the definition itself
+      const token = findDeclarationNameAtPosition(module, offset);
+      if (!token) return null;
+      return { definitionToken: token, workspace };
+    }
+  }
+
+  /**
+   * Converts a Token (from any module in the workspace) to a vscode.Location.
+   */
+  private tokenToLocation(
+    token: Token,
+    workspace: Workspace,
+  ): vscode.Location | null {
+    const modulePathOrUri = token.line.modulePath;
+    const moduleUri = modulePathOrUri.startsWith("@")
+      ? workspace.modulePathToUri(modulePathOrUri)
+      : modulePathOrUri;
+    const moduleBundle = this.moduleBundles.get(moduleUri);
+    if (!moduleBundle) {
+      console.warn(`Module bundle not found for token in: ${moduleUri}`);
+      return null;
+    }
+    const { positionTracker } = moduleBundle;
+    const startPos = positionTracker.getPosition(token.position);
+    const endPos = positionTracker.getPosition(
+      token.position + token.text.length,
+    );
+    return new vscode.Location(
+      vscode.Uri.parse(moduleUri),
+      new vscode.Range(
+        new vscode.Position(startPos.line, startPos.column),
+        new vscode.Position(endPos.line, endPos.column),
+      ),
+    );
+  }
+
   private reassigneModulesTimeout?: NodeJS.Timeout;
   private readonly moduleBundles = new Map<string, ModuleBundle>(); // key: file URI
   private readonly workspaces = new Map<string, Workspace>(); // key: skir.yml file URI
@@ -530,6 +703,7 @@ class Workspace implements ModuleParser {
   lastSnapshot?: Snapshot;
   private privateDependencies?: Dependencies;
   private readonly dependencyModules = new Map<string, ModuleBundle>();
+  private lastResolvedModuleSet: ModuleSet | undefined = undefined;
 
   static addModule(
     moduleBundle: ModuleBundle,
@@ -715,6 +889,7 @@ class Workspace implements ModuleParser {
         anyError = anyError || errors.length > 0;
         this.updateDiagnostics(moduleBundle, errors);
       }
+      this.lastResolvedModuleSet = moduleSet;
       if (anyError || !lastSnapshot) {
         return;
       }
@@ -842,6 +1017,11 @@ class Workspace implements ModuleParser {
       );
     }
   }
+
+  /** Returns all successfully resolved modules in this workspace. */
+  getResolvedModules(): readonly Module[] {
+    return this.lastResolvedModuleSet?.resolvedModules ?? [];
+  }
 }
 
 const skirLanguageExtension = new SkirLanguageExtension();
@@ -866,6 +1046,81 @@ class SkirDefinitionProvider implements vscode.DefinitionProvider {
     } catch (error) {
       console.error(`Error finding definition at ${position}:`, error);
       throw error;
+    }
+  }
+}
+
+class SkirHoverProvider implements vscode.HoverProvider {
+  constructor(private readonly skirLanguageExtension: SkirLanguageExtension) {}
+
+  provideHover(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+  ): vscode.Hover | null {
+    try {
+      const uri = document.uri.toString();
+      const offset = document.offsetAt(position);
+      return this.skirLanguageExtension.getHoverInfo(uri, offset);
+    } catch (error) {
+      console.error("Error providing hover:", error);
+      return null;
+    }
+  }
+}
+
+class SkirReferenceProvider implements vscode.ReferenceProvider {
+  constructor(private readonly skirLanguageExtension: SkirLanguageExtension) {}
+
+  provideReferences(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    _context: vscode.ReferenceContext,
+  ): vscode.Location[] {
+    try {
+      const uri = document.uri.toString();
+      const offset = document.offsetAt(position);
+      return this.skirLanguageExtension.findAllReferences(uri, offset);
+    } catch (error) {
+      console.error("Error providing references:", error);
+      return [];
+    }
+  }
+}
+
+class SkirRenameProvider implements vscode.RenameProvider {
+  constructor(private readonly skirLanguageExtension: SkirLanguageExtension) {}
+
+  prepareRename(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+  ): { range: vscode.Range; placeholder: string } {
+    const uri = document.uri.toString();
+    const offset = document.offsetAt(position);
+    // Throws if rename is not permitted
+    return this.skirLanguageExtension.prepareRenameAt(
+      uri,
+      offset,
+      document,
+      position,
+    );
+  }
+
+  provideRenameEdits(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    newName: string,
+  ): vscode.WorkspaceEdit | null {
+    try {
+      const uri = document.uri.toString();
+      const offset = document.offsetAt(position);
+      return this.skirLanguageExtension.provideRenameEditsAt(
+        uri,
+        offset,
+        newName,
+      );
+    } catch (error) {
+      console.error("Error providing rename edits:", error);
+      return null;
     }
   }
 }
@@ -1118,6 +1373,66 @@ function getRangeForToken(
   );
 }
 
+/**
+ * Returns the replacement text for a token during a rename operation.
+ * If the token text is wrapped in single or double quotes the new name is
+ * wrapped in the same quote character, otherwise the name is returned as-is.
+ */
+function getTokenReplacement(token: Token, newName: string): string {
+  const text = token.text;
+  if (text.length >= 2) {
+    const first = text[0];
+    const last = text[text.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return first + newName + last;
+    }
+  }
+  return newName;
+}
+
+/**
+ * Walks a module's declaration tree and returns the `name` Token of the
+ * declaration whose name span contains `position`.
+ * Returns null when the position is not inside any declaration name.
+ * Used for the case where the cursor sits on a definition rather than a
+ * reference (i.e. `findDefinition` returned null).
+ */
+function findDeclarationNameAtPosition(
+  module: Module,
+  position: number,
+): Token | null {
+  function tokenContainsPos(token: Token): boolean {
+    return (
+      token.position <= position &&
+      position < token.position + token.text.length
+    );
+  }
+
+  function searchInRecord(record: any): Token | null {
+    const nameToken = record.name as Token;
+    if (tokenContainsPos(nameToken)) return nameToken;
+    for (const field of record.fields as Array<{ name: Token }>) {
+      if (tokenContainsPos(field.name)) return field.name;
+    }
+
+    for (const nested of record.nestedRecords as any[]) {
+      const found = searchInRecord(nested);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  for (const decl of module.declarations) {
+    if (decl.kind === "import") continue; // Import has no single name token
+    if (tokenContainsPos(decl.name)) return decl.name;
+    if (decl.kind === "record") {
+      const found = searchInRecord(decl);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 const fileContentManager = new FileContentManager(skirLanguageExtension);
 
 // VS Code extension activation
@@ -1134,6 +1449,27 @@ export async function activate(
   const definitionDisposable = vscode.languages.registerDefinitionProvider(
     { scheme: "file", language: "skir" },
     definitionProvider,
+  );
+
+  // Register hover provider for skir files
+  const hoverProvider = new SkirHoverProvider(skirLanguageExtension);
+  const hoverDisposable = vscode.languages.registerHoverProvider(
+    { scheme: "file", language: "skir" },
+    hoverProvider,
+  );
+
+  // Register references provider for skir files
+  const referenceProvider = new SkirReferenceProvider(skirLanguageExtension);
+  const referenceDisposable = vscode.languages.registerReferenceProvider(
+    { scheme: "file", language: "skir" },
+    referenceProvider,
+  );
+
+  // Register rename provider for skir files
+  const renameProvider = new SkirRenameProvider(skirLanguageExtension);
+  const renameDisposable = vscode.languages.registerRenameProvider(
+    { scheme: "file", language: "skir" },
+    renameProvider,
   );
 
   // Register document formatting provider for skir files
@@ -1166,6 +1502,9 @@ export async function activate(
   context.subscriptions.push(
     fileContentManager,
     definitionDisposable,
+    hoverDisposable,
+    referenceDisposable,
+    renameDisposable,
     formattingProvider,
     formattingDisposable,
     formatOnSaveDisposable,
