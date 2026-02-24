@@ -1,10 +1,4 @@
-import type {
-  Module,
-  MutableModule,
-  Result,
-  SkirError,
-  Token,
-} from "skir-internal";
+import type { Module, SkirError, Token } from "skir-internal";
 import {
   checkCompatibility,
   getTokenForBreakingChange,
@@ -14,7 +8,7 @@ import { parseSkirConfig, SkirConfigError } from "skir/dist/config_parser.js";
 import { findDefinition, findReferences } from "skir/dist/definition_finder.js";
 import { getShortMessageForBreakingChange } from "skir/dist/error_renderer.js";
 import { formatModule } from "skir/dist/formatter.js";
-import { ModuleParser, ModuleSet } from "skir/dist/module_set.js";
+import { ModuleSet } from "skir/dist/module_set.js";
 import { type Packages } from "skir/dist/package_types.js";
 import { parseModule } from "skir/dist/parser.js";
 import { snapshotFileContentToModuleSet } from "skir/dist/snapshotter.js";
@@ -120,7 +114,7 @@ export class SkirLanguageExtension {
           this.moduleBundles.delete(uri);
         }
         if (content) {
-          const moduleBundle = this.parseSkirModule(content, uri);
+          const moduleBundle = this.makeModuleBundle(content, uri);
           const moduleWorkspace = this.findModuleWorkspace(moduleBundle);
           this.moduleBundles.set(uri, moduleBundle);
           if (moduleWorkspace) {
@@ -133,8 +127,7 @@ export class SkirLanguageExtension {
         const workspaceUri = uri.replace(/\/skir-snapshot\.json$/, "/skir.yml");
         const workspace = this.workspaces.get(workspaceUri);
         if (workspace) {
-          workspace.lastSnapshot = undefined;
-          workspace.scheduleResolution();
+          workspace.setLastSnapshot(undefined);
         }
         if (content) {
           // Find the workspace for this snapshot
@@ -143,11 +136,10 @@ export class SkirLanguageExtension {
               content.content,
             );
             if (moduleSetOrError instanceof ModuleSet) {
-              workspace.lastSnapshot = {
+              workspace.setLastSnapshot({
                 moduleSet: moduleSetOrError,
                 jsonContent: content,
-              };
-              workspace.scheduleResolution();
+              });
             } else {
               console.error(`Failed to parse snapshot file ${uri}`);
             }
@@ -180,15 +172,15 @@ export class SkirLanguageExtension {
               console.error(`Failed to parse dependencies file ${uri}:`, error);
               break;
             }
-            const moduleMap = new Map<string, string>();
+            const depModuleMap = new Map<string, string>();
             for (const pkg of Object.values(packages)) {
               for (const [modulePath, content] of Object.entries(pkg.modules)) {
-                moduleMap.set(modulePath, content);
+                depModuleMap.set(modulePath, content);
               }
             }
-            const moduleSet = ModuleSet.fromMap(moduleMap);
+            const depModuleSet = ModuleSet.compile(depModuleMap);
             this.setDependencies(workspace, {
-              moduleSet: moduleSet,
+              moduleSet: depModuleSet,
               jsonContent: content,
               packages: packages,
             });
@@ -270,9 +262,9 @@ export class SkirLanguageExtension {
     const { workspace } = moduleWorkspace;
     workspace.revolveNow();
 
-    const module = moduleBundle.astTree.result;
+    const module = moduleWorkspace.astTree;
     if (!module) {
-      console.log(`Module has errors: ${uri}.`);
+      console.error(`Module not parsed, probably an error: ${uri}.`);
       return null;
     }
     const definitionMatch = findDefinition(module, position);
@@ -346,22 +338,10 @@ export class SkirLanguageExtension {
     });
   }
 
-  private parseSkirModule(content: FileContent, uri: string): ModuleBundle {
-    let astTree: Result<Module | null>;
-    {
-      const tokens = tokenizeModule(content.content, uri);
-      if (tokens.errors.length !== 0) {
-        astTree = {
-          result: null,
-          errors: tokens.errors,
-        };
-      } else {
-        astTree = parseModule(tokens.result, "lenient");
-      }
-    }
+  private makeModuleBundle(content: FileContent, uri: string): ModuleBundle {
     const positionTracker = new PositionTracker(content.content);
     const isExternalDependency = false;
-    return { uri, isExternalDependency, content, positionTracker, astTree };
+    return { uri, isExternalDependency, content, positionTracker };
   }
 
   /** Finds the workspace which contains the given module URI. */
@@ -391,14 +371,11 @@ export class SkirLanguageExtension {
     }
     if (match) {
       const { srcUri, externalUri } = match;
-      if (moduleUri.startsWith(srcUri)) {
+      if (moduleUri.startsWith(srcUri) || moduleUri.startsWith(externalUri)) {
         return {
           workspace: match,
           modulePath: match.moduleUriToPath(moduleUri),
         };
-      } else if (moduleUri.startsWith(externalUri)) {
-        // The module is in the skir-external/ directory of a workspace: skip it.
-        return undefined;
       }
     }
     // Raise a warning and possible lexical/parsing errors.
@@ -410,13 +387,7 @@ export class SkirLanguageExtension {
       warningMessage,
       vscode.DiagnosticSeverity.Warning,
     );
-    const errors = moduleBundle.astTree.errors.filter(
-      (error) => !error.errorIsInOtherModule,
-    );
-    const diagnostics = [warning].concat(
-      errorsToDiagnostics(errors, moduleBundle),
-    );
-    this.diagnosticCollection.set(vscode.Uri.parse(moduleUri), diagnostics);
+    this.diagnosticCollection.set(vscode.Uri.parse(moduleUri), [warning]);
     return undefined;
   }
 
@@ -453,7 +424,7 @@ export class SkirLanguageExtension {
   getHoverInfo(uri: string, offset: number): vscode.Hover | null {
     const moduleBundle = this.moduleBundles.get(uri);
     if (!moduleBundle) return null;
-    const module = moduleBundle.astTree.result;
+    const module = moduleBundle.moduleWorkspace?.astTree;
     if (!module) return null;
 
     const definitionMatch = findDefinition(module, offset);
@@ -501,8 +472,11 @@ export class SkirLanguageExtension {
   ): { range: vscode.Range; placeholder: string } {
     const moduleBundle = this.moduleBundles.get(uri);
     if (!moduleBundle) throw new Error("Cannot rename: module not found");
-    const module = moduleBundle.astTree.result;
-    if (!module) throw new Error("Cannot rename: module has errors");
+    const { moduleWorkspace } = moduleBundle;
+    if (!moduleWorkspace) throw new Error("No workspace");
+    moduleWorkspace.workspace.revolveNow();
+    const module = moduleBundle.moduleWorkspace?.astTree;
+    if (!module) throw new Error("No AST tree");
 
     // If the cursor is on a reference to an external symbol, reject rename
     const definitionMatch = findDefinition(module, offset);
@@ -573,7 +547,7 @@ export class SkirLanguageExtension {
   ): { definitionToken: Token; workspace: Workspace } | null {
     const moduleBundle = this.moduleBundles.get(uri);
     if (!moduleBundle) return null;
-    const module = moduleBundle.astTree.result;
+    const module = moduleBundle.moduleWorkspace?.astTree;
     if (!module) return null;
     const { moduleWorkspace } = moduleBundle;
     if (!moduleWorkspace) return null;
@@ -599,13 +573,11 @@ export class SkirLanguageExtension {
     token: Token,
     workspace: Workspace,
   ): vscode.Location | null {
-    const modulePathOrUri = token.line.modulePath;
-    const moduleUri = modulePathOrUri.startsWith("@")
-      ? workspace.modulePathToUri(modulePathOrUri)
-      : modulePathOrUri;
+    const { modulePath } = token.line;
+    const moduleUri = workspace.modulePathToUri(modulePath);
     const moduleBundle = this.moduleBundles.get(moduleUri);
     if (!moduleBundle) {
-      console.warn(`Module bundle not found for token in: ${moduleUri}`);
+      console.warn(`Module bundle not found for token in: ${modulePath}`);
       return null;
     }
     const { positionTracker } = moduleBundle;
@@ -633,9 +605,6 @@ function getFileType(
 ): "skir.yml" | "skir-snapshot.json" | "*.skir" | "dependencies.json" | null {
   if (uri.endsWith("/skir-external/dependencies.json")) {
     return "dependencies.json";
-  } else if (uri.includes("/skir-external/")) {
-    // Ignore other files in skir-external/
-    return null;
   } else if (uri.endsWith("/skir.yml")) {
     return "skir.yml";
   } else if (uri.endsWith("/skir-snapshot.json")) {
@@ -650,6 +619,7 @@ function getFileType(
 interface ModuleWorkspace {
   readonly workspace: Workspace;
   readonly modulePath: string;
+  astTree?: Module;
 }
 
 interface FileContent {
@@ -663,7 +633,6 @@ interface ModuleBundle {
   readonly isExternalDependency: boolean;
   readonly content: FileContent;
   readonly positionTracker: PositionTracker;
-  readonly astTree: Result<Module | null>;
   moduleWorkspace?: ModuleWorkspace;
 }
 
@@ -683,7 +652,7 @@ interface SkirConfigBundle {
   yamlContent: FileContent;
 }
 
-class Workspace implements ModuleParser {
+class Workspace {
   constructor(
     readonly rootUri: string,
     public skirConfig: SkirConfigBundle,
@@ -700,10 +669,11 @@ class Workspace implements ModuleParser {
     promise: Promise<void>;
     callback: () => void;
   }>;
-  lastSnapshot?: Snapshot;
-  private privateDependencies?: Dependencies;
+  private lastSnapshotData?: Snapshot;
+  private dependenciesData?: Dependencies;
   private readonly dependencyModules = new Map<string, ModuleBundle>();
   private lastResolvedModuleSet: ModuleSet | undefined = undefined;
+  private changedSinceLastResolution = false;
 
   static addModule(
     moduleBundle: ModuleBundle,
@@ -715,6 +685,7 @@ class Workspace implements ModuleParser {
     moduleBundle.moduleWorkspace = moduleWorkspace;
     workspace.modules.set(moduleWorkspace.modulePath, moduleBundle);
     workspace.scheduleResolution();
+    workspace.changedSinceLastResolution = true;
   }
 
   static removeModule(moduleBundle: ModuleBundle): void {
@@ -726,10 +697,11 @@ class Workspace implements ModuleParser {
     workspace.modules.delete(moduleWorkspace.modulePath);
     moduleBundle.moduleWorkspace = undefined;
     workspace.scheduleResolution();
+    workspace.changedSinceLastResolution = true;
   }
 
   get dependencies(): Dependencies | undefined {
-    return this.privateDependencies;
+    return this.dependenciesData;
   }
 
   setDependencies(dependencies: Dependencies | undefined): {
@@ -750,7 +722,7 @@ class Workspace implements ModuleParser {
     }
     const oldModules = [...this.dependencyModules.values()];
     this.dependencyModules.clear();
-    this.privateDependencies = dependencies;
+    this.dependenciesData = dependencies;
     const newModules: ModuleBundle[] = [];
     let dependenciesInSync: boolean;
     if (dependencies) {
@@ -781,7 +753,6 @@ class Workspace implements ModuleParser {
             lastModified: 0,
           },
           positionTracker: positionTracker,
-          astTree: module,
           moduleWorkspace: {
             workspace: this,
             modulePath,
@@ -819,18 +790,18 @@ class Workspace implements ModuleParser {
           ],
     );
     this.scheduleResolution();
+    this.changedSinceLastResolution = true;
     return { oldModules, newModules };
   }
 
-  parseModule(modulePath: string): Result<MutableModule | null> {
-    const moduleBundle = this.modules.get(modulePath);
-    if (!moduleBundle) {
-      return {
-        result: null,
-        errors: [],
-      };
-    }
-    return moduleBundle.astTree;
+  get lastSnapshot(): Snapshot | undefined {
+    return this.lastSnapshotData;
+  }
+
+  setLastSnapshot(snapshot: Snapshot | undefined): void {
+    this.lastSnapshotData = snapshot;
+    this.changedSinceLastResolution = true;
+    this.scheduleResolution();
   }
 
   scheduleResolution(): void {
@@ -874,19 +845,44 @@ class Workspace implements ModuleParser {
    * Stores the errors in every module bundle.
    */
   private resolve(): void {
-    const { privateDependencies: dependencies, lastSnapshot, modules } = this;
+    const {
+      dependenciesData: dependencies,
+      lastSnapshotData: lastSnapshot,
+      modules,
+    } = this;
     try {
-      const moduleSet = new ModuleSet(this);
-      if (dependencies) {
-        moduleSet.mergeFrom(dependencies.moduleSet);
+      if (!this.changedSinceLastResolution) return;
+      // Create the map from module path to module content.
+      const moduleMap = new Map<string, string>();
+      for (const [modulePath, moduleBundle] of modules.entries()) {
+        if (!modulePath.startsWith("@")) {
+          moduleMap.set(modulePath, moduleBundle.content.content);
+        }
       }
+      if (dependencies) {
+        for (const pkg of Object.values(dependencies.packages)) {
+          for (const [modulePath, content] of Object.entries(pkg.modules)) {
+            moduleMap.set(modulePath, content);
+          }
+        }
+      }
+      const moduleSet = ModuleSet.compile(
+        moduleMap,
+        this.lastResolvedModuleSet,
+        "lenient",
+      );
       let anyError = false;
       for (const [modulePath, moduleBundle] of modules.entries()) {
-        const parseResult = moduleSet.parseAndResolve(modulePath);
-        const errors = parseResult.errors.filter(
-          (error) => !error.errorIsInOtherModule,
+        const parsedModule = moduleSet.modules.get(modulePath)!;
+        const errors = parsedModule.errors.filter(
+          (e) => !e.errorIsInOtherModule,
         );
         anyError = anyError || errors.length > 0;
+        const { moduleWorkspace } = moduleBundle;
+        if (moduleWorkspace?.workspace !== this) {
+          throw new Error(`Module workspace mismatch for ${moduleBundle.uri}`);
+        }
+        moduleWorkspace.astTree = parsedModule.result;
         this.updateDiagnostics(moduleBundle, errors);
       }
       this.lastResolvedModuleSet = moduleSet;
@@ -943,6 +939,7 @@ class Workspace implements ModuleParser {
     } finally {
       this.scheduledResolution?.callback();
       this.scheduledResolution = undefined;
+      this.changedSinceLastResolution = false;
     }
   }
 
@@ -965,18 +962,11 @@ class Workspace implements ModuleParser {
     readonly modulePath: string;
     readonly moduleUri: string;
   } {
-    const modulePathOrUri = token.line.modulePath;
-    if (modulePathOrUri.startsWith("@")) {
-      return {
-        modulePath: modulePathOrUri,
-        moduleUri: this.modulePathToUri(modulePathOrUri),
-      };
-    } else {
-      return {
-        modulePath: this.moduleUriToPath(modulePathOrUri),
-        moduleUri: token.line.modulePath,
-      };
-    }
+    const { modulePath } = token.line;
+    return {
+      modulePath: modulePath,
+      moduleUri: this.modulePathToUri(modulePath),
+    };
   }
 
   moduleUriToPath(uri: string): string {
@@ -1020,7 +1010,10 @@ class Workspace implements ModuleParser {
 
   /** Returns all successfully resolved modules in this workspace. */
   getResolvedModules(): readonly Module[] {
-    return this.lastResolvedModuleSet?.resolvedModules ?? [];
+    const { lastResolvedModuleSet } = this;
+    return lastResolvedModuleSet
+      ? [...lastResolvedModuleSet.modules.values()].map((it) => it.result)
+      : [];
   }
 }
 
