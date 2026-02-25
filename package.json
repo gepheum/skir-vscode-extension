@@ -67,7 +67,7 @@
     "package": "vsce package"
   },
   "dependencies": {
-    "skir": "^1.1.4",
+    "skir": "^1.1.5",
     "skir-internal": "0.2.4"
   },
   "devDependencies": {

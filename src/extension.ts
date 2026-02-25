@@ -246,7 +246,10 @@ export class SkirLanguageExtension {
     this.uriToTimeout.set(uri, timeout);
   }
 
-  findDefinitionAt(uri: string, position: number): vscode.Location | null {
+  findDefinitionAt(
+    uri: string,
+    position: number,
+  ): vscode.LocationLink[] | null {
     console.log(`Finding definition at ${uri}:${position}`);
     const { moduleBundles } = this;
     const moduleBundle = moduleBundles.get(uri);
@@ -274,26 +277,37 @@ export class SkirLanguageExtension {
     }
 
     // Convert DefinitionMatch to vscode.Location
-    const { modulePath } = definitionMatch;
+    const { modulePath, declaration, referenceToken } = definitionMatch;
     const targetUri = workspace.modulePathToUri(modulePath);
-    const target = moduleBundles.get(targetUri);
-    if (!target) {
-      console.warn(
-        `Module ${targetUri} not found, skipping definition lookup.`,
+    let targetRange: vscode.Range;
+    if (declaration) {
+      const targetModule = moduleBundles.get(targetUri);
+      if (!targetModule) {
+        console.warn(
+          `Module ${targetUri} not found, skipping definition lookup.`,
+        );
+        return null;
+      }
+      const { positionTracker } = targetModule;
+      targetRange = getRangeForToken(declaration.name, positionTracker);
+    } else {
+      // The user clicked on a module path.
+      // Move the cursor to the first line of the module.
+      targetRange = new vscode.Range(
+        new vscode.Position(0, 0),
+        new vscode.Position(0, 0),
       );
-      return null;
     }
-    const { positionTracker } = target;
-    const targetPosition = positionTracker.getPosition(
-      definitionMatch.position,
-    );
-    console.log(
-      `Found definition at ${targetUri}:${targetPosition.line}:${targetPosition.column}`,
-    );
-    return new vscode.Location(
-      vscode.Uri.parse(targetUri),
-      new vscode.Position(targetPosition.line, targetPosition.column),
-    );
+    return [
+      {
+        targetUri: vscode.Uri.parse(targetUri),
+        targetRange: targetRange,
+        originSelectionRange: getRangeForToken(
+          referenceToken,
+          moduleBundle.positionTracker,
+        ),
+      },
+    ];
   }
 
   /** Get module bundle for a given URI (used by DocumentLinkProvider) */
@@ -581,16 +595,9 @@ export class SkirLanguageExtension {
       return null;
     }
     const { positionTracker } = moduleBundle;
-    const startPos = positionTracker.getPosition(token.position);
-    const endPos = positionTracker.getPosition(
-      token.position + token.text.length,
-    );
     return new vscode.Location(
       vscode.Uri.parse(moduleUri),
-      new vscode.Range(
-        new vscode.Position(startPos.line, startPos.column),
-        new vscode.Position(endPos.line, endPos.column),
-      ),
+      getRangeForToken(token, positionTracker),
     );
   }
 
@@ -1025,16 +1032,10 @@ class SkirDefinitionProvider implements vscode.DefinitionProvider {
   provideDefinition(
     document: vscode.TextDocument,
     position: vscode.Position,
-  ): vscode.Location | null {
+  ): vscode.LocationLink[] | null {
     try {
       const offset = document.offsetAt(position);
       const uri = document.uri.toString();
-      const content = document.getText();
-
-      this.skirLanguageExtension.setFileContent(uri, {
-        content,
-        lastModified: Date.now(),
-      });
       return this.skirLanguageExtension.findDefinitionAt(uri, offset);
     } catch (error) {
       console.error(`Error finding definition at ${position}:`, error);
@@ -1358,7 +1359,7 @@ function getRangeForToken(
 ): vscode.Range {
   const startPos = positionTracker.getPosition(token.position);
   const endPos = positionTracker.getPosition(
-    token.position + token.text.length,
+    token.position + token.originalText.length,
   );
   return new vscode.Range(
     new vscode.Position(startPos.line, startPos.column),
