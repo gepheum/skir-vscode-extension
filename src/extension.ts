@@ -612,6 +612,8 @@ function getFileType(
 ): "skir.yml" | "skir-snapshot.json" | "*.skir" | "dependencies.json" | null {
   if (uri.endsWith("/skir-external/dependencies.json")) {
     return "dependencies.json";
+  } else if (/\/skir-external\//.test(uri)) {
+    return null;
   } else if (uri.endsWith("/skir.yml")) {
     return "skir.yml";
   } else if (uri.endsWith("/skir-snapshot.json")) {
@@ -678,6 +680,7 @@ class Workspace {
   }>;
   private lastSnapshotData?: Snapshot;
   private dependenciesData?: Dependencies;
+  // key: module path
   private readonly dependencyModules = new Map<string, ModuleBundle>();
   private lastResolvedModuleSet: ModuleSet | undefined = undefined;
   private changedSinceLastResolution = false;
@@ -879,8 +882,9 @@ class Workspace {
         "lenient",
       );
       let anyError = false;
-      for (const [modulePath, moduleBundle] of modules.entries()) {
-        const parsedModule = moduleSet.modules.get(modulePath)!;
+      for (const [modulePath, parsedModule] of moduleSet.modules) {
+        const moduleBundle = (modules.get(modulePath) ??
+          this.dependencyModules.get(modulePath))!;
         const errors = parsedModule.errors.filter(
           (e) => !e.errorIsInOtherModule,
         );
@@ -1022,6 +1026,59 @@ class Workspace {
       ? [...lastResolvedModuleSet.modules.values()].map((it) => it.result)
       : [];
   }
+}
+
+class SkirCompletionProvider implements vscode.CompletionItemProvider {
+  /**
+   * Called by VS Code to produce the list of completion items at the cursor.
+   *
+   * @param _document - The open file. Use document.getText(), document.lineAt(position), etc.
+   *   to read source text and figure out what context the cursor is in.
+   * @param _position - Where the cursor is (line + character). Combine with `document` to
+   *   extract the word being typed, preceding tokens, etc.
+   * @param _token - A CancellationToken. Check token.isCancellationRequested when doing
+   *   async/expensive work so VS Code can cancel stale requests.
+   * @param _context - Carries two useful fields:
+   *   - triggerKind: CompletionTriggerKind.Invoke (Ctrl+Space) vs. TriggerCharacter vs. TriggerForIncompleteCompletions
+   *   - triggerCharacter: the character that triggered the list (e.g. "."), or undefined for
+   *     explicit / word-based invocations.
+   *
+   * Return either a CompletionItem[], or a CompletionList (which also has an `isIncomplete`
+   * flag telling VS Code to re-query as the user keeps typing).
+   *
+   * Key fields you can set on each CompletionItem:
+   *   - label        (required) – what appears in the dropdown
+   *   - kind         – controls the icon, e.g. CompletionItemKind.Field / .Method / .Keyword
+   *   - insertText   – text actually inserted; defaults to label
+   *   - detail       – short right-hand annotation shown in the dropdown
+   *   - documentation – MarkdownString shown in the side panel
+   *   - sortText     – overrides alphabetical ordering in the list
+   *   - filterText   – overrides what the user's typed text is matched against
+   *
+   * For expensive fields (documentation, additionalTextEdits) prefer computing them lazily
+   * in resolveCompletionItem() instead of here, so the initial list renders fast.
+   */
+  provideCompletionItems(
+    _document: vscode.TextDocument,
+    _position: vscode.Position,
+    _token: vscode.CancellationToken,
+    _context: vscode.CompletionContext,
+  ): vscode.CompletionItem[] {
+    // TODO: replace with real suggestions derived from the AST / workspace.
+    // return ["a", "b", "c"].map((label) => new vscode.CompletionItem(label));
+    return [];
+  }
+
+  /**
+   * Optional: lazily fill in expensive fields for the item the user has highlighted.
+   * Only called once per item, after provideCompletionItems() has already run.
+   * Do NOT change label, sortText, filterText, insertText, or range here –
+   * those must be final when provideCompletionItems returns.
+   */
+  // resolveCompletionItem(item: vscode.CompletionItem): vscode.CompletionItem {
+  //   item.documentation = new vscode.MarkdownString("detailed docs…");
+  //   return item;
+  // }
 }
 
 const skirLanguageExtension = new SkirLanguageExtension();
@@ -1466,6 +1523,18 @@ export async function activate(
     renameProvider,
   );
 
+  // Register completion provider for skir files.
+  // The optional extra string arguments are "trigger characters": typing one of
+  // them immediately opens the completion list (in addition to the default
+  // word-based / Ctrl+Space triggering). Example: add "." or ":" here if
+  // completions should pop up right after those characters are typed.
+  const completionProvider = new SkirCompletionProvider();
+  const completionDisposable = vscode.languages.registerCompletionItemProvider(
+    { scheme: "file", language: "skir" },
+    completionProvider,
+    // ".", ":",  ← trigger characters would go here
+  );
+
   // Register document formatting provider for skir files
   const formattingProvider = new SkirFormattingProvider();
   const formattingDisposable =
@@ -1499,6 +1568,7 @@ export async function activate(
     hoverDisposable,
     referenceDisposable,
     renameDisposable,
+    completionDisposable,
     formattingProvider,
     formattingDisposable,
     formatOnSaveDisposable,
