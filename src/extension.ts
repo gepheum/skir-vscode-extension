@@ -3,6 +3,7 @@ import {
   checkCompatibility,
   getTokenForBreakingChange,
 } from "skir/dist/compatibility_checker.js";
+import { provideCompletionItems as skirProvideCompletionItems } from "skir/dist/completion_helper.js";
 import { SkirConfig } from "skir/dist/config";
 import { parseSkirConfig, SkirConfigError } from "skir/dist/config_parser.js";
 import { findDefinition, findReferences } from "skir/dist/definition_finder.js";
@@ -472,6 +473,43 @@ export class SkirLanguageExtension {
     return referenceTokens
       .map((token) => this.tokenToLocation(token, workspace))
       .filter((loc): loc is vscode.Location => loc !== null);
+  }
+
+  /** Returns completion items for the given position in a skir file. */
+  getCompletionItems(
+    uri: string,
+    offset: number,
+    document: vscode.TextDocument,
+  ): vscode.CompletionItem[] {
+    const moduleBundle = this.moduleBundles.get(uri);
+    if (!moduleBundle) return [];
+    const { moduleWorkspace } = moduleBundle;
+    if (!moduleWorkspace) return [];
+    const { workspace, modulePath } = moduleWorkspace;
+    const oldModuleSet = workspace.getLastResolvedModuleSet();
+    if (!oldModuleSet) return [];
+    const moduleContent = document.getText();
+    const result = skirProvideCompletionItems(
+      modulePath,
+      moduleContent,
+      offset,
+      oldModuleSet,
+    );
+    if (!result) return [];
+    const placeholderRange = new vscode.Range(
+      document.positionAt(result.placeholderStartPos),
+      document.positionAt(result.placeholderEndPos),
+    );
+    return result.items.map((item) => {
+      const completionItem = new vscode.CompletionItem(item.name);
+      completionItem.range = placeholderRange;
+      if (item.doc?.text) {
+        const md = new vscode.MarkdownString();
+        md.appendText(item.doc.text.trim());
+        completionItem.documentation = md;
+      }
+      return completionItem;
+    });
   }
 
   /**
@@ -1026,59 +1064,34 @@ class Workspace {
       ? [...lastResolvedModuleSet.modules.values()].map((it) => it.result)
       : [];
   }
+
+  getLastResolvedModuleSet(): ModuleSet | undefined {
+    return this.lastResolvedModuleSet;
+  }
 }
 
 class SkirCompletionProvider implements vscode.CompletionItemProvider {
-  /**
-   * Called by VS Code to produce the list of completion items at the cursor.
-   *
-   * @param _document - The open file. Use document.getText(), document.lineAt(position), etc.
-   *   to read source text and figure out what context the cursor is in.
-   * @param _position - Where the cursor is (line + character). Combine with `document` to
-   *   extract the word being typed, preceding tokens, etc.
-   * @param _token - A CancellationToken. Check token.isCancellationRequested when doing
-   *   async/expensive work so VS Code can cancel stale requests.
-   * @param _context - Carries two useful fields:
-   *   - triggerKind: CompletionTriggerKind.Invoke (Ctrl+Space) vs. TriggerCharacter vs. TriggerForIncompleteCompletions
-   *   - triggerCharacter: the character that triggered the list (e.g. "."), or undefined for
-   *     explicit / word-based invocations.
-   *
-   * Return either a CompletionItem[], or a CompletionList (which also has an `isIncomplete`
-   * flag telling VS Code to re-query as the user keeps typing).
-   *
-   * Key fields you can set on each CompletionItem:
-   *   - label        (required) – what appears in the dropdown
-   *   - kind         – controls the icon, e.g. CompletionItemKind.Field / .Method / .Keyword
-   *   - insertText   – text actually inserted; defaults to label
-   *   - detail       – short right-hand annotation shown in the dropdown
-   *   - documentation – MarkdownString shown in the side panel
-   *   - sortText     – overrides alphabetical ordering in the list
-   *   - filterText   – overrides what the user's typed text is matched against
-   *
-   * For expensive fields (documentation, additionalTextEdits) prefer computing them lazily
-   * in resolveCompletionItem() instead of here, so the initial list renders fast.
-   */
+  constructor(private readonly skirLanguageExtension: SkirLanguageExtension) {}
+
   provideCompletionItems(
-    _document: vscode.TextDocument,
-    _position: vscode.Position,
+    document: vscode.TextDocument,
+    position: vscode.Position,
     _token: vscode.CancellationToken,
     _context: vscode.CompletionContext,
   ): vscode.CompletionItem[] {
-    // TODO: replace with real suggestions derived from the AST / workspace.
-    // return ["a", "b", "c"].map((label) => new vscode.CompletionItem(label));
-    return [];
+    try {
+      const uri = document.uri.toString();
+      const offset = document.offsetAt(position);
+      return this.skirLanguageExtension.getCompletionItems(
+        uri,
+        offset,
+        document,
+      );
+    } catch (error) {
+      console.error("Error providing completions:", error);
+      return [];
+    }
   }
-
-  /**
-   * Optional: lazily fill in expensive fields for the item the user has highlighted.
-   * Only called once per item, after provideCompletionItems() has already run.
-   * Do NOT change label, sortText, filterText, insertText, or range here –
-   * those must be final when provideCompletionItems returns.
-   */
-  // resolveCompletionItem(item: vscode.CompletionItem): vscode.CompletionItem {
-  //   item.documentation = new vscode.MarkdownString("detailed docs…");
-  //   return item;
-  // }
 }
 
 const skirLanguageExtension = new SkirLanguageExtension();
@@ -1524,15 +1537,15 @@ export async function activate(
   );
 
   // Register completion provider for skir files.
-  // The optional extra string arguments are "trigger characters": typing one of
-  // them immediately opens the completion list (in addition to the default
-  // word-based / Ctrl+Space triggering). Example: add "." or ":" here if
-  // completions should pop up right after those characters are typed.
-  const completionProvider = new SkirCompletionProvider();
+  const completionProvider = new SkirCompletionProvider(skirLanguageExtension);
   const completionDisposable = vscode.languages.registerCompletionItemProvider(
     { scheme: "file", language: "skir" },
     completionProvider,
-    // ".", ":",  ← trigger characters would go here
+    ".",
+    "|",
+    "'",
+    '"',
+    "/",
   );
 
   // Register document formatting provider for skir files
