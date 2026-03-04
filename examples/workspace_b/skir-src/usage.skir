@@ -49,7 +49,9 @@ struct Shape {
 }
 
 // Example of a method definition
-method CalculateArea(Shape): float64 = 200;
+method CalculateArea(
+  Shape
+): float64 = 200;
 
 // Example of removed fields
 struct VersionedData {

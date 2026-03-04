@@ -52,8 +52,12 @@ const SERVER_ERROR: ApiResponse = {
 };
 
 // Method definitions for RPC interface
-method GetUser(int32): User = 100;
-method UpdateUser(User): ApiResponse = 863630;
+method GetUser(
+  int32
+): User = 100;
+method UpdateUser(
+  User
+): ApiResponse = 863630;
 
 // Example of timestamp type
 struct AuditLog {
