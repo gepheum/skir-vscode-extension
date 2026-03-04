@@ -11,27 +11,34 @@ import { getShortMessageForBreakingChange } from "skir/dist/error_renderer.js";
 import { formatModule } from "skir/dist/formatter.js";
 import { ModuleSet } from "skir/dist/module_set.js";
 import { type Packages } from "skir/dist/package_types.js";
-import { parseModule } from "skir/dist/parser.js";
 import { snapshotFileContentToModuleSet } from "skir/dist/snapshotter.js";
-import { tokenizeModule } from "skir/dist/tokenizer.js";
 import * as vscode from "vscode";
 
 // Formatting provider for Skir files
 class SkirFormattingProvider implements vscode.DocumentFormattingEditProvider {
+  constructor(private readonly skirLanguageExtension: SkirLanguageExtension) {}
+
   provideDocumentFormattingEdits(
     document: vscode.TextDocument,
   ): vscode.TextEdit[] {
+    const moduleBundle = this.skirLanguageExtension.getModuleBundle(
+      document.uri.toString(),
+    );
+    if (!moduleBundle) {
+      console.warn(
+        `No module bundle found for ${document.uri.toString()}, skipping formatting.`,
+      );
+      return [];
+    }
+    const modulePath = moduleBundle?.moduleWorkspace?.modulePath;
+    if (!modulePath) {
+      console.warn(
+        `No workspace found for ${document.uri.toString()}, skipping formatting.`,
+      );
+      return [];
+    }
     const unformattedCode = document.getText();
-    const tokens = tokenizeModule(unformattedCode, "");
-    if (tokens.errors.length) {
-      return [];
-    }
-    // Make sure no parsing errors exist before formatting
-    if (parseModule(tokens.result, "lenient").errors.length) {
-      return [];
-    }
-
-    const textEdits = formatModule(tokens.result).textEdits;
+    const textEdits = formatModule(unformattedCode, modulePath).textEdits;
     return textEdits.map((edit) =>
       vscode.TextEdit.replace(
         new vscode.Range(
@@ -1549,7 +1556,7 @@ export async function activate(
   );
 
   // Register document formatting provider for skir files
-  const formattingProvider = new SkirFormattingProvider();
+  const formattingProvider = new SkirFormattingProvider(skirLanguageExtension);
   const formattingDisposable =
     vscode.languages.registerDocumentFormattingEditProvider(
       { scheme: "file", language: "skir" },
