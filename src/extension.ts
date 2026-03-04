@@ -63,8 +63,7 @@ export class SkirLanguageExtension {
 
   setFileContent(uri: string, content: FileContent | undefined): void {
     const fileType = getFileType(uri);
-    if (fileType) {
-      // Clear diagnostics for this file
+    if (fileType && !content) {
       this.diagnosticCollection.delete(vscode.Uri.parse(uri));
     }
     switch (fileType) {
