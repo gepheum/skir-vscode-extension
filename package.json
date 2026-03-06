@@ -67,8 +67,8 @@
     "package": "vsce package"
   },
   "dependencies": {
-    "skir": "^1.1.10",
-    "skir-internal": "0.2.13"
+    "skir": "^1.1.13",
+    "skir-internal": "0.2.16"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

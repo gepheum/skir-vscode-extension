@@ -1552,6 +1552,7 @@ export async function activate(
     "'",
     '"',
     "/",
+    "[",
   );
 
   // Register document formatting provider for skir files
