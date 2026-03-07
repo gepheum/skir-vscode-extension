@@ -1,3 +1,4 @@
+import * as path from "path";
 import type { Module, SkirError, Token } from "skir-internal";
 import {
   checkCompatibility,
@@ -1524,10 +1525,99 @@ function findDeclarationNameAtPosition(
 const fileContentManager = new FileContentManager(skirLanguageExtension);
 
 // VS Code extension activation
+// Terminals shared across command invocations
+let genWatchTerminal: vscode.Terminal | undefined;
+let snapshotTerminal: vscode.Terminal | undefined;
+
+function getOrCreateTerminal(
+  existing: vscode.Terminal | undefined,
+  name: string,
+  cwd: string,
+): vscode.Terminal {
+  if (existing) {
+    existing.show();
+    return existing;
+  }
+  return vscode.window.createTerminal({ name, cwd });
+}
+
+function getSkirYmlDir(uri: vscode.Uri): string {
+  return path.dirname(uri.fsPath);
+}
+
 export async function activate(
   context: vscode.ExtensionContext,
 ): Promise<void> {
   console.log("Skir Language Support extension is now active");
+
+  // Register skir.yml context-menu commands (before async operations so they
+  // are always available even if the workspace scan fails or takes time)
+  const genWatchDisposable = vscode.commands.registerCommand(
+    "skir.genWatch",
+    (uri: vscode.Uri) => {
+      const cwd = getSkirYmlDir(uri);
+      genWatchTerminal = getOrCreateTerminal(
+        genWatchTerminal,
+        "Skir: gen --watch",
+        cwd,
+      );
+      genWatchTerminal.show();
+      genWatchTerminal.sendText("npx skir gen --watch");
+    },
+  );
+
+  const snapshotDisposable = vscode.commands.registerCommand(
+    "skir.snapshot",
+    (uri: vscode.Uri) => {
+      const cwd = getSkirYmlDir(uri);
+      snapshotTerminal = getOrCreateTerminal(
+        snapshotTerminal,
+        "Skir: snapshot",
+        cwd,
+      );
+      snapshotTerminal.show();
+      snapshotTerminal.sendText("npx skir snapshot");
+    },
+  );
+
+  const snapshotDryRunDisposable = vscode.commands.registerCommand(
+    "skir.snapshotDryRun",
+    (uri: vscode.Uri) => {
+      const cwd = getSkirYmlDir(uri);
+      snapshotTerminal = getOrCreateTerminal(
+        snapshotTerminal,
+        "Skir: snapshot",
+        cwd,
+      );
+      snapshotTerminal.show();
+      snapshotTerminal.sendText("npx skir snapshot --dry-run");
+    },
+  );
+
+  const snapshotViewDisposable = vscode.commands.registerCommand(
+    "skir.snapshotView",
+    (uri: vscode.Uri) => {
+      const cwd = getSkirYmlDir(uri);
+      snapshotTerminal = getOrCreateTerminal(
+        snapshotTerminal,
+        "Skir: snapshot",
+        cwd,
+      );
+      snapshotTerminal.show();
+      snapshotTerminal.sendText("npx skir snapshot --view");
+    },
+  );
+
+  // Clear terminal references when terminals are closed
+  const onDidCloseTerminalDisposable = vscode.window.onDidCloseTerminal(
+    (terminal) => {
+      if (terminal === genWatchTerminal) {
+        genWatchTerminal = undefined;
+      } else if (terminal === snapshotTerminal) {
+        snapshotTerminal = undefined;
+      }
+    },
+  );
 
   // Perform initial scan of workspace
   await fileContentManager.runScan();
@@ -1610,6 +1700,11 @@ export async function activate(
     formattingProvider,
     formattingDisposable,
     formatOnSaveDisposable,
+    genWatchDisposable,
+    snapshotDisposable,
+    snapshotDryRunDisposable,
+    snapshotViewDisposable,
+    onDidCloseTerminalDisposable,
   );
 }
 

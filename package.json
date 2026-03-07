@@ -54,7 +54,49 @@
         "scopeName": "source.skir",
         "path": "./syntaxes/skir.tmLanguage.json"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "skir.genWatch",
+        "title": "Skir: Generate (watch)"
+      },
+      {
+        "command": "skir.snapshot",
+        "title": "Skir: Snapshot"
+      },
+      {
+        "command": "skir.snapshotDryRun",
+        "title": "Skir: Snapshot (dry run)"
+      },
+      {
+        "command": "skir.snapshotView",
+        "title": "Skir: Snapshot (view)"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "when": "resourceFilename == skir.yml",
+          "command": "skir.genWatch",
+          "group": "skir@1"
+        },
+        {
+          "when": "resourceFilename == skir.yml",
+          "command": "skir.snapshot",
+          "group": "skir@2"
+        },
+        {
+          "when": "resourceFilename == skir.yml",
+          "command": "skir.snapshotDryRun",
+          "group": "skir@3"
+        },
+        {
+          "when": "resourceFilename == skir.yml",
+          "command": "skir.snapshotView",
+          "group": "skir@4"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
