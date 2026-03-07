@@ -514,6 +514,24 @@ export class SkirLanguageExtension {
         md.appendText(item.doc.text.trim());
         completionItem.documentation = md;
       }
+      if (item.modulePath) {
+        completionItem.detail = `Auto-import from "${modulePath}"`;
+      }
+      if (item.insertText) {
+        completionItem.insertText = item.insertText;
+      }
+      const { importBlockEdit } = item;
+      if (importBlockEdit) {
+        completionItem.additionalTextEdits = [
+          vscode.TextEdit.replace(
+            new vscode.Range(
+              document.positionAt(importBlockEdit.oldStart),
+              document.positionAt(importBlockEdit.oldEnd),
+            ),
+            importBlockEdit.newText,
+          ),
+        ];
+      }
       return completionItem;
     });
   }

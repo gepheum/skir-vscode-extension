@@ -12,6 +12,8 @@ This extension provides language support for the Skir language - a declarative l
 - **Hover documentation** — shows the doc comment of a record, field, method or constant
 - **Find all references** — lists every usage of a symbol across the workspace
 - **Rename symbol** — renames a symbol and all its references in one step (local symbols only)
+- **Auto-completion** — context-aware suggestions for field names, types, constants and more
+- **Automatic imports** — suggests symbols from other modules and inserts the import statement automatically
 - **Format on save** and on-demand formatting
 - **Comment toggling** — line (`//`) and block (`/* */`) comments
 - **Bracket matching and auto-closing pairs**
@@ -74,6 +76,24 @@ The extension continuously validates your files and reports errors in the Proble
 - **Type errors** — unknown types, missing fields, etc.
 - **Breaking changes** — when a `skir-snapshot.json` is present, any change that would break existing consumers (e.g. removed fields, changed types) is highlighted as a warning.
 - **Dependencies out of sync** — a warning on `skir.yml` when the installed packages do not match the declared versions; run `npx skir gen` to fix.
+
+## Auto-Completion
+
+Press **Ctrl+Space** (or **⌃Space** on macOS) at any point in a `.skir` file to get context-aware suggestions:
+
+- Field names and their expected types inside struct or constant literals.
+- Type names (records, enums) visible in the current scope.
+- Import paths when writing an `import` statement.
+
+Suggestions are derived from the current state of all modules in the workspace, so they stay up to date as you edit.
+
+## Automatic Imports
+
+When you press **Ctrl+Space** on an unqualified symbol name, the extension also suggests symbols from modules that are not yet imported in the current file. Selecting such a suggestion automatically inserts the corresponding import statement at the top of the file:
+
+```skir
+import { Point } from "geometry.skir";
+```
 
 ## Formatting
 
