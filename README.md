@@ -2,7 +2,7 @@
 
 This extension provides language support for the Skir language - a declarative language for representing data types, constants and APIs (similar to Protocol Buffer).
 
-**Website:** https://skir.sh
+**Website:** https://skir.build
 
 ## Features
 
