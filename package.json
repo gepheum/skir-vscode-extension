@@ -2,7 +2,7 @@
   "name": "skir-language",
   "displayName": "Skir - Language Support",
   "description": "Language support for Skir - a language for representing data types, constants and RPC interfaces",
-  "version": "0.2.17",
+  "version": "0.2.18",
   "publisher": "TylerFibonacci",
   "engines": {
     "vscode": "^1.60.0"

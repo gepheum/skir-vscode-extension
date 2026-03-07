@@ -15,6 +15,7 @@ This extension provides language support for the Skir language - a declarative l
 - **Auto-completion** — context-aware suggestions for field names, types, constants and more
 - **Automatic imports** — suggests symbols from other modules and inserts the import statement automatically
 - **Format on save** and on-demand formatting
+- **Import updates on file rename/move** — when a `.skir` file is renamed or moved, the extension offers to update all import statements that reference it
 - **Comment toggling** — line (`//`) and block (`/* */`) comments
 - **Bracket matching and auto-closing pairs**
 
@@ -98,6 +99,16 @@ import { Point } from "geometry.skir";
 ## Formatting
 
 Documents are formatted automatically on save. You can also trigger formatting manually with **Shift+Alt+F** (or right-click → *Format Document*).
+
+## Import Updates on File Rename / Move
+
+When you rename or move one or more `.skir` files (for example via the VS Code Explorer), the extension detects that other files in the same workspace may have import statements pointing to the old path. It then shows a prompt:
+
+> **Update imports in N file(s)?** — *Update Imports* / *Skip*
+
+Choosing **Update Imports** rewrites the import block in every affected file so that paths reflect the new file location. The update is applied atomically as a single workspace edit, so it can be undone in one step with **Ctrl+Z**.
+
+This also handles bulk operations: if several files are moved together (e.g. an entire directory), cross-references between the moved files are updated correctly, in addition to references from files that stayed in place.
 
 ## Requirements
 

@@ -10,6 +10,7 @@ import { parseSkirConfig, SkirConfigError } from "skir/dist/config_parser.js";
 import { findDefinition, findReferences } from "skir/dist/definition_finder.js";
 import { getShortMessageForBreakingChange } from "skir/dist/error_renderer.js";
 import { formatModule } from "skir/dist/formatter.js";
+import { formatImportBlock } from "skir/dist/import_block_formatter.js";
 import { ModuleSet } from "skir/dist/module_set.js";
 import { type Packages } from "skir/dist/package_types.js";
 import { snapshotFileContentToModuleSet } from "skir/dist/snapshotter.js";
@@ -321,6 +322,43 @@ export class SkirLanguageExtension {
   /** Get module bundle for a given URI (used by DocumentLinkProvider) */
   getModuleBundle(uri: string): ModuleBundle | undefined {
     return this.moduleBundles.get(uri);
+  }
+
+  /**
+   * Finds all import update text edits needed after a .skir file is
+   * renamed/moved from oldUri to newUri.
+   * Returns a map from file URI → TextEdit[].
+   */
+  buildImportUpdateEdits(
+    oldUri: string,
+    newUri: string,
+  ): Map<string, vscode.TextEdit[]> {
+    const result = new Map<string, vscode.TextEdit[]>();
+
+    // Find the workspace that contains the old file.
+    const workspace =
+      this.moduleBundles.get(oldUri)?.moduleWorkspace?.workspace;
+
+    if (!workspace) return result;
+
+    let oldModulePath: string;
+    let newModulePath: string;
+    try {
+      oldModulePath = workspace.moduleUriToPath(oldUri);
+      newModulePath = workspace.moduleUriToPath(newUri);
+    } catch (e) {
+      console.error(e);
+      return result;
+    }
+    if (oldModulePath === newModulePath) return result;
+
+    workspace.revolveNow();
+
+    return workspace.makeImportEditsForModulePathChange(
+      oldUri,
+      oldModulePath,
+      newModulePath,
+    );
   }
 
   private setDependencies(
@@ -1093,6 +1131,52 @@ class Workspace {
   getLastResolvedModuleSet(): ModuleSet | undefined {
     return this.lastResolvedModuleSet;
   }
+
+  /**
+   * Scans every module in this workspace for imports of oldModulePath and
+   * returns text edits that replace those import path strings with
+   * newModulePath.
+   * The map is keyed by file URI; the renamed file itself (oldUri) is skipped.
+   */
+  makeImportEditsForModulePathChange(
+    oldUri: string,
+    oldModulePath: string,
+    newModulePath: string,
+  ): Map<string, vscode.TextEdit[]> {
+    const result = new Map<string, vscode.TextEdit[]>();
+    for (const moduleBundle of this.modules.values()) {
+      if (moduleBundle.uri === oldUri) continue; // Skip the renamed file itself.
+      const module = moduleBundle.moduleWorkspace?.astTree;
+      if (!module) continue;
+
+      // Skip modules that don't import the renamed file.
+      if (!(oldModulePath in module.pathToImportedNames)) continue;
+
+      // Build a new pathToImportedNames with the key renamed.
+      const newPathToImportedNames = { ...module.pathToImportedNames };
+      newPathToImportedNames[newModulePath] =
+        newPathToImportedNames[oldModulePath];
+      delete newPathToImportedNames[oldModulePath];
+
+      // Re-format the entire import block (mirrors completion_helper.ts).
+      const newImportBlock = formatImportBlock(newPathToImportedNames);
+      const { importBlockRange } = module;
+      const { positionTracker } = moduleBundle;
+
+      const startPos = positionTracker.getPosition(importBlockRange!.start);
+      const endPos = positionTracker.getPosition(importBlockRange!.end);
+      const edit = vscode.TextEdit.replace(
+        new vscode.Range(
+          new vscode.Position(startPos.line, startPos.column),
+          new vscode.Position(endPos.line, endPos.column),
+        ),
+        newImportBlock,
+      );
+
+      result.set(moduleBundle.uri, [edit]);
+    }
+    return result;
+  }
 }
 
 class SkirCompletionProvider implements vscode.CompletionItemProvider {
@@ -1619,6 +1703,59 @@ export async function activate(
     },
   );
 
+  // Handle .skir file renames/moves: offer to update imports in other files.
+  const renameFilesDisposable = vscode.workspace.onDidRenameFiles(
+    async (event) => {
+      const skirRenames = event.files.filter(
+        (f) =>
+          f.oldUri.toString().endsWith(".skir") &&
+          f.newUri.toString().endsWith(".skir"),
+      );
+      if (skirRenames.length === 0) return;
+
+      // Build a lookup so edits targeting a file that was *also* renamed in
+      // this batch are redirected to the new URI.
+      const oldToNew = new Map<string, string>(
+        skirRenames.map(({ oldUri, newUri }) => [
+          oldUri.toString(),
+          newUri.toString(),
+        ]),
+      );
+
+      // Collect all import update edits across all renamed files.
+      const allEdits = new Map<string, vscode.TextEdit[]>();
+      for (const { oldUri, newUri } of skirRenames) {
+        const edits = skirLanguageExtension.buildImportUpdateEdits(
+          oldUri.toString(),
+          newUri.toString(),
+        );
+        for (const [uri, fileEdits] of edits) {
+          // If the file that contains the import was also renamed, apply the
+          // edits to its new location instead.
+          const targetUri = oldToNew.get(uri) ?? uri;
+          const existing = allEdits.get(targetUri) ?? [];
+          allEdits.set(targetUri, [...existing, ...fileEdits]);
+        }
+      }
+
+      if (allEdits.size === 0) return;
+
+      const totalFiles = allEdits.size;
+      const answer = await vscode.window.showInformationMessage(
+        `Update imports in ${totalFiles} file${totalFiles !== 1 ? "s" : ""}?`,
+        "Update Imports",
+        "Skip",
+      );
+      if (answer !== "Update Imports") return;
+
+      const workspaceEdit = new vscode.WorkspaceEdit();
+      for (const [uri, edits] of allEdits) {
+        workspaceEdit.set(vscode.Uri.parse(uri), edits);
+      }
+      await vscode.workspace.applyEdit(workspaceEdit);
+    },
+  );
+
   // Perform initial scan of workspace
   await fileContentManager.runScan();
 
@@ -1705,6 +1842,7 @@ export async function activate(
     snapshotDryRunDisposable,
     snapshotViewDisposable,
     onDidCloseTerminalDisposable,
+    renameFilesDisposable,
   );
 }
 
