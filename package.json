@@ -2,12 +2,12 @@
   "name": "skir-language",
   "displayName": "Skir - Language Support",
   "description": "Language support for Skir - a language for representing data types, constants and RPC interfaces",
-  "version": "0.2.19",
+  "version": "0.2.20",
   "publisher": "TylerFibonacci",
   "engines": {
     "vscode": "^1.60.0"
   },
-  "icon": "resources/iceberg-icon.png",
+  "icon": "resources/octopus-icon.png",
   "homepage": "https://skir.build/",
   "repository": {
     "type": "git",
@@ -132,6 +132,6 @@
   },
   "overrides": {
     "diff": "^8.0.3",
-    "serialize-javascript": "^7.0.3"
+    "serialize-javascript": "^7.0.4"
   }
 }
