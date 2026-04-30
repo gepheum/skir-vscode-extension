@@ -5,7 +5,7 @@ import {
   getTokenForBreakingChange,
 } from "skir/dist/compatibility_checker.js";
 import { provideCompletionItems as skirProvideCompletionItems } from "skir/dist/completion_helper.js";
-import { SkirConfig } from "skir/dist/config";
+import { SkirConfig } from "skir/dist/config.js";
 import { parseSkirConfig, SkirConfigError } from "skir/dist/config_parser.js";
 import { findDefinition, findReferences } from "skir/dist/definition_finder.js";
 import { getShortMessageForBreakingChange } from "skir/dist/error_renderer.js";
@@ -40,7 +40,10 @@ class SkirFormattingProvider implements vscode.DocumentFormattingEditProvider {
       return [];
     }
     const unformattedCode = document.getText();
-    const textEdits = formatModule(unformattedCode, modulePath).textEdits;
+    const textEdits = formatModule({
+      sourceCode: unformattedCode,
+      modulePath: modulePath,
+    }).textEdits;
     return textEdits.map((edit) =>
       vscode.TextEdit.replace(
         new vscode.Range(
@@ -187,7 +190,11 @@ export class SkirLanguageExtension {
                 depModuleMap.set(modulePath, content);
               }
             }
-            const depModuleSet = ModuleSet.compile(depModuleMap);
+            const depModuleSet = ModuleSet.compile(
+              depModuleMap,
+              "no-cache",
+              "strict",
+            );
             this.setDependencies(workspace, {
               moduleSet: depModuleSet,
               jsonContent: content,
@@ -837,17 +844,20 @@ class Workspace {
     const newModules: ModuleBundle[] = [];
     let dependenciesInSync: boolean;
     if (dependencies) {
-      const modulePathToErrors = new Map<string, SkirError[]>();
-      for (const error of dependencies.moduleSet.errors) {
-        if (error.errorIsInOtherModule) {
-          continue;
+      const modulePathToErrors = new Map<string, MutableErrorsAndWarnings>();
+      for (const errorsOrWarnings of ERRORS_WARNINGS) {
+        for (const error of dependencies.moduleSet[errorsOrWarnings]) {
+          if (error.errorIsInOtherModule) {
+            continue;
+          }
+          const { modulePath } = this.getModuleForToken(error.token);
+          let moduleErrors = modulePathToErrors.get(modulePath);
+          if (!moduleErrors) {
+            moduleErrors = { errors: [], warnings: [] };
+            modulePathToErrors.set(modulePath, moduleErrors);
+          }
+          moduleErrors[errorsOrWarnings].push(error);
         }
-        const { modulePath } = this.getModuleForToken(error.token);
-        const diagnostics = modulePathToErrors.get(modulePath) || [];
-        if (diagnostics.length <= 0) {
-          modulePathToErrors.set(modulePath, diagnostics);
-        }
-        diagnostics.push(error);
       }
       for (const [
         modulePath,
@@ -871,7 +881,10 @@ class Workspace {
         };
         this.dependencyModules.set(modulePath, moduleBundle);
         newModules.push(moduleBundle);
-        const errors = modulePathToErrors.get(modulePath) || [];
+        const errors = modulePathToErrors.get(modulePath) ?? {
+          errors: [],
+          warnings: [],
+        };
         const diagnostics = errorsToDiagnostics(errors, moduleBundle);
         this.diagnosticCollection.set(vscode.Uri.parse(moduleUri), diagnostics);
       }
@@ -979,7 +992,7 @@ class Workspace {
       }
       const moduleSet = ModuleSet.compile(
         moduleMap,
-        this.lastResolvedModuleSet,
+        this.lastResolvedModuleSet ?? "no-cache",
         "lenient",
       );
       let anyError = false;
@@ -989,13 +1002,14 @@ class Workspace {
         const errors = parsedModule.errors.filter(
           (e) => !e.errorIsInOtherModule,
         );
+        const warnings = parsedModule.warnings ?? [];
         anyError = anyError || errors.length > 0;
         const { moduleWorkspace } = moduleBundle;
         if (moduleWorkspace?.workspace !== this) {
           throw new Error(`Module workspace mismatch for ${moduleBundle.uri}`);
         }
         moduleWorkspace.astTree = parsedModule.result;
-        this.updateDiagnostics(moduleBundle, errors);
+        this.updateDiagnostics(moduleBundle, { errors, warnings });
       }
       this.lastResolvedModuleSet = moduleSet;
       if (anyError || !lastSnapshot) {
@@ -1057,7 +1071,7 @@ class Workspace {
 
   private updateDiagnostics(
     moduleBundle: ModuleBundle,
-    errors: readonly SkirError[],
+    errors: ErrorsAndWarnings,
   ): void {
     const { uri } = moduleBundle;
     const diagnostics = errorsToDiagnostics(errors, moduleBundle);
@@ -1490,18 +1504,26 @@ class PositionTracker {
 }
 
 function errorsToDiagnostics(
-  errors: readonly SkirError[],
+  errors: ErrorsAndWarnings,
   moduleBundle: ModuleBundle,
 ): vscode.Diagnostic[] {
   const { positionTracker } = moduleBundle;
-  return errors.map(
-    (error) =>
-      new vscode.Diagnostic(
-        getRangeForToken(error.token, positionTracker),
-        error.message || `expected: ${error.expected}`,
-        vscode.DiagnosticSeverity.Error,
+  const errorToDiagnostic = (
+    error: SkirError,
+    severity: vscode.DiagnosticSeverity,
+  ): vscode.Diagnostic =>
+    new vscode.Diagnostic(
+      getRangeForToken(error.token, positionTracker),
+      error.message || `expected: ${error.expected}`,
+      severity,
+    );
+  return errors.errors
+    .map((e) => errorToDiagnostic(e, vscode.DiagnosticSeverity.Error))
+    .concat(
+      errors.warnings.map((e) =>
+        errorToDiagnostic(e, vscode.DiagnosticSeverity.Warning),
       ),
-  );
+    );
 }
 
 function configErrorsToDiagnostics(
@@ -1845,6 +1867,21 @@ export async function activate(
     renameFilesDisposable,
   );
 }
+
+interface MutableErrorsAndWarnings {
+  readonly errors: SkirError[];
+  readonly warnings: SkirError[];
+}
+
+interface ErrorsAndWarnings {
+  readonly errors: readonly SkirError[];
+  readonly warnings: readonly SkirError[];
+}
+
+const ERRORS_WARNINGS: ReadonlyArray<keyof ErrorsAndWarnings> = [
+  "errors",
+  "warnings",
+];
 
 export function deactivate(): void {
   fileContentManager.dispose();
