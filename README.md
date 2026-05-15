@@ -1,8 +1,36 @@
 # Skir Language Support for Visual Studio Code
 
-This extension provides language support for the Skir language - a declarative language for representing data types, constants and APIs (similar to Protocol Buffer).
+Skir is a declarative language for defining data types, constants, and APIs. You write one schema in a `.skir` file and generate idiomatic, type-safe code across multiple languages.
+
+This VS Code extension gives you first-class IDE support for `.skir` files: real-time validation, code completion, automatic formatting, navigation, and refactoring.
+
+If you're looking for a **Protocol Buffers alternative**, **cross-language schema tooling**, **type-safe API contracts**, **schema evolution safety**, or **JSON/binary serialization models**, this extension is for you.
 
 **Website:** https://skir.build
+
+## What Is Skir?
+
+Skir is designed for teams that share data and API contracts across services, repos, and languages.
+
+- **One schema, 12 languages, zero friction**
+- Generate production-ready code from one `.skir` definition
+- Keep clients and servers aligned with shared method/type contracts
+- Prioritize immutable generated models with required fields at construction time
+- Serialize to JSON or binary depending on your performance and debugging needs
+
+Supported generation targets include TypeScript, Python, Java, C#, C++, Go, Kotlin, Dart, Swift, Rust, Zig, and Gleam.
+
+## What Problems Skir Solves
+
+- **Contract drift between services**: one schema and generated code reduce mismatches.
+- **Painful multi-language type sharing**: define once, generate everywhere.
+- **Risky schema changes over time**: evolve safely with clear rules and compatibility checks.
+- **Runtime integration bugs**: end-to-end type safety catches errors before deployment.
+- **Manual boilerplate churn**: generated models, serializers, and method definitions replace repetitive glue code.
+
+## Why This VS Code Extension
+
+The extension is the fastest way to author and maintain `.skir` schemas with confidence.
 
 ## Features
 
